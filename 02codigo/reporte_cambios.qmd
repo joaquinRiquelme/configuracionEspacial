@@ -1,0 +1,120 @@
+---
+title: "Análisis de Cambios Espaciales por Año"
+format: 
+  html:
+    toc: true
+    code-fold: true
+editor: visual
+---
+
+```{r setup, include=FALSE}
+# Paquetes necesarios
+library(terra)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(DT) # Para tablas interactivas
+library(stringr)
+```
+
+## 1. Lectura de archivos raster
+
+```{r lectura}
+# Ruta a la carpeta con los TIFF
+folder <- "../Documentos/GitHub/configuracionEspacial/Mapbiomas/"   # <--- Cambia esta ruta
+
+# Leer archivos .tif
+tif_files <- list.files(folder, pattern = ".tif", full.names = TRUE)
+
+# Ordenar archivos por año si los nombres contienen el año, ej: "clase_2010.tif"
+years <- stringr::str_extract(tif_files, "\\d...")
+rasters <- rast(tif_files)
+plot(rasters)
+
+xmin <- -71.5    # ejemplo
+xmax <- -70   # ejemplo
+ymin <- -33  # ejemplo
+ymax <- -32.5    # ejemplo
+
+# Crear un objeto 'extent' (extensión)
+area_corte <- ext(xmin, xmax, ymin, ymax)
+plot(area_corte)
+# Cortar todos los raster al área definida
+rasters <- crop(rasters, area_corte)
+plot(rasters)
+names(rasters) <- years
+```
+
+## 2. Conversión a DataFrame y análisis
+
+```{r conversion}
+# Convertir raster a dataframe
+df <- terra::as.data.frame(rasters)#, xy = FALSE, na.rm = FALSE)
+
+# Agregar columna de celda
+df <- df %>% mutate(cell = row_number())
+df_long <- df %>%
+  pivot_longer(
+    cols = -cell,
+    names_to = "year",
+    values_to = "class"
+  )
+```
+
+## 3. Identificación de cambios y permanencia
+
+```{r cambios}
+# Pivot_wider para comparar celdas entre años
+df_wide <- df_long %>%
+  pivot_wider(names_from = year, values_from = class)
+
+# Detectar cambios: TRUE si al menos un año difiere en la celda
+change_cols <- setdiff(names(df_wide), "cell")
+df_wide <- df_wide %>%
+  mutate(
+    change = apply(select(., all_of(change_cols)), 1, function(x) length(unique(x[!is.na(x)])) > 1)
+  )
+```
+
+## 4. Estadísticas por clase y año
+
+```{r estadisticas}
+# Estadística: superficie por clase y año
+cell_area_ha <- res(rasters)[1] * res(rasters)[2] / 10000 # área de celda en hectáreas
+stat <- df_long %>%
+  group_by(year, class) %>%
+  summarise(
+    n_cells = n(),
+    superficie_ha = n_cells * cell_area_ha,
+    .groups = "drop"
+  )
+
+datatable(stat, options = list(pageLength = 10), caption = "Superficie por clase y año")
+```
+
+## 5. Gráfico de superficies
+
+```{r grafico, fig.width=8, fig.height=5}
+ggplot(stat, aes(x = year, y = superficie_ha, fill = as.factor(class))) +
+  geom_col(position = "stack") +
+  labs(x = "Año", y = "Superficie (ha)", fill = "Clase") +
+  theme_minimal()
+```
+
+## 6. Resumen de cambio/permanencia
+
+```{r resumen_cambio}
+# Tabla resumen de celdas que cambiaron o no
+res_cambio <- df_wide %>%
+  group_by(change) %>%
+  summarise(n_celdas = n(), .groups = "drop")
+datatable(res_cambio, caption = "Celdas con o sin cambio entre años")
+```
+
+------------------------------------------------------------------------
+
+# Notas
+
+-   Cambia la ruta en `folder` por la carpeta real de tus archivos.
+-   Puedes personalizar títulos, textos, gráficos, etc.
+-   Para compilar, abre el archivo en **RStudio** y haz clic en "Render" (necesitas tener **Quarto** instalado).
